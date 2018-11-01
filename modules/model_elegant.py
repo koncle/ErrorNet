@@ -1,12 +1,12 @@
 import torch
 import torch.nn as nn
 
-from model_helper import DoubleConv, Up, Down
+from modules.model_helper import DoubleConv, Up, Down
 
 class UNet(nn.Module):
     def __init__(self, in_channels, num_classes):
         super(UNet, self).__init__()
-        self.DEBUG = False
+        self.DEBUG = True
         self.down0 = DoubleConv(in_channels, 64)
         self.down1 = Down(64, 128)
         self.down2 = Down(128, 256)
@@ -35,7 +35,7 @@ class UNet(nn.Module):
         up0 = self.up0(up1, down0)
         out_value = self.conv_out(up0)
 
-        if DEBUG:
+        if self.DEBUG:
             print(down0.size())
             print(down1.size())
             print(down2.size())
@@ -49,7 +49,7 @@ class UNet(nn.Module):
         return self.softmax(out_value)
 
 if __name__ == '__main__':
-    unet = UNet(1, 2).cuda()
+    unet = UNet(1, 1).cuda()
     a = torch.randn((1, 1, 572, 572)).cuda()
     print(unet(a).size())
 

@@ -1,5 +1,6 @@
 import torch
 from torch import nn as nn
+import torch.nn.functional as F
 
 
 class DoubleConv(nn.Module):
@@ -19,14 +20,19 @@ class DoubleConv(nn.Module):
 
 
 class Up(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, interpolate=True):
         super(Up, self).__init__()
         self.up = nn.ConvTranspose2d(in_channels=in_channels, out_channels=out_channels, kernel_size=2, stride=2)
         self.double_conv = DoubleConv(in_channels, out_channels)
+        self.interpolate = interpolate
 
     def forward(self, to_up, down):
-        up = self.up(to_up)
-        cropped_down = self.crop_to_same_size(down, up)
+        if self.interpolate:
+            up = F.interpolate(to_up, down.size()[2:], mode="bilinear")
+            cropped_down = down
+        else:
+            up = self.up(to_up)
+            cropped_down = self.crop_to_same_size(down, up)
         concatenated_var = torch.cat([cropped_down, up], dim=1)
         return self.double_conv(concatenated_var)
 
