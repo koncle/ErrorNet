@@ -1,23 +1,30 @@
-class BaseLogger(object):
-    def open(self):
-        raise NotImplementedError
+# Hooks for output
+def print_epoch_hook(epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc):
+    print('\r[{}/{}]     {:.4f}/{:.4f}     {:.4f}/{:.4f}'
+          .format(epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc), flush=False)
 
-    def close(self):
-        raise NotImplementedError
 
-    def write(self, s):
-        raise NotImplementedError
+def print_step_hook(it, num_iter, loss, acc):
+    print('\r[{}/{}]       {:.4f}/{:.4f}'.format(it, num_iter, loss, acc), end='', flush=True)
 
-class SimpleLogger(BaseLogger):
-    def __init__(self, file_name):
-        self.file_name = file_name
 
-    def open(self):
-        self.f = open(self.file_name, "w+")
+def print_start_train_hook():
+    print('Epoch      train_loss/ acc      val_loss/acc')
 
-    def close(self):
-        self.f.close()
 
-    def write(self, s):
-        self.f.write(s)
+def print_end_train_hook(average_loss, average_accuracy, val_loss, val_acc):
+    print('\rTest      {:.4f}/{:.4f}     {:.4f}/{:.4f}\n'
+          .format(average_loss, average_accuracy, val_loss, val_acc))
 
+
+def get_file_logger(file_path):
+    log = open(file_path, "w+")
+
+    # register hooks
+    def epoch_hook(epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc):
+        nonlocal log
+        s = '\r[{}/{}]     {:.4f}/{:.4f}     {:.4f}/{:.4f}'.format(epoch, total_epoch, average_loss, average_accuracy,
+                                                                   val_loss, val_acc)
+        log.write(s)
+
+    return epoch_hook

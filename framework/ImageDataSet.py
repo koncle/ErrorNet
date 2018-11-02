@@ -12,9 +12,9 @@ class ImageDataSet(Dataset):
     def __init__(self, path, mode='train',
                  img_suffix=".jpg", mask_suffix=".bmp", transforms=None,
                  train_ration=0.8, test_ration=0.2, k_fold=None,
+                 train_set_path=None, test_set_path=None,
                  seed=22222):
         super(ImageDataSet, self).__init__()
-        self._path = Path(path)
         self._img_suffix = img_suffix
         self._mask_suffix = mask_suffix
         self._transforms = transforms
@@ -23,16 +23,27 @@ class ImageDataSet(Dataset):
 
         self._train_set, self._dev_set, self._test_set = None, None, None
 
-        # load image file_name list(not contain mask)
-        self._img_file_names = self._load_img_file_name(self._path)
-
-        if k_fold is None:
-            self._train_set, self._dev_set, _ = self._split_files(train_ration, test_ration, k_fold, seed)
+        # Try optimize this area
+        if train_set_path is not None and test_set_path is not None:
+            # load train test set from specified path directly
+            self._train_set, self._dev_set = self._load_train_test_set_from_path(Path(train_set_path),
+                                                                                  Path(test_set_path))
         else:
-            # split file into a test set, and a generator to generate train set and dev set
-            self._train_and_dev_set, self._test_set, self._train_dev_set_idx_generator = self._split_files(train_ration,
-                                                                                                           test_ration,
-                                                                                                           k_fold, seed)
+            if self._path is None:
+                raise Exception("No path found to split file!!")
+            self._path = Path(path)
+            # Split train test set from a whole file
+            # load image file_name list(not contain mask)
+            self._img_file_names = self._load_img_file_name(self._path)
+
+            if k_fold is None:
+                self._train_set, self._dev_set, _ = self._split_files(train_ration, test_ration, k_fold, seed)
+            else:
+                # split file into a test set, and a generator to generate train set and dev set
+                self._train_and_dev_set, self._test_set, self._train_dev_set_idx_generator = self._split_files(
+                                                                                                    train_ration,
+                                                                                                    test_ration,
+                                                                                                    k_fold, seed)
             # generate next train set and dev set
             # self.next_fold()
         print(self)
@@ -43,6 +54,11 @@ class ImageDataSet(Dataset):
         """
         # Search all files in path with suffix is _img_suffix
         return np.array(glob(str(path / ("**/*" + self._img_suffix)), recursive=True))
+
+    def _load_train_test_set_from_path(self, train_set_path, test_set_path):
+        train_set = self._load_img_file_name(train_set_path)
+        test_set = self._load_img_file_name(test_set_path)
+        return train_set, test_set
 
     def _split_files(self, train_ration, test_ration, k_fold, seed):
         """
@@ -179,7 +195,7 @@ class ImageDataSet(Dataset):
         return "train set : {}, dev set : {}, test set : {}".format(len(self._train_set),
                                                                     len(self._dev_set),
                                                                     len(self._test_set)
-                                                                        if self._test_set is not None else "no")
+                                                                    if self._test_set is not None else "no")
 
 
 def check_dataset():

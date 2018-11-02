@@ -9,6 +9,7 @@ import torch
 from framework.ImageDataSet import ImageDataSet
 from modules.UNet import UNet
 from framework.loss import dice_loss, SidedBCELoss, BCELoss2D
+from framework.logger import *
 
 from dataset.transforms import resizeN, random_horizontal_flipN
 from framework.visualize import show_graph
@@ -46,8 +47,15 @@ class TrainFrameWork(object):
             self.load_model(checkpoint_path)
 
         # Log hooks
+        # OH MY GOD
         self._step_hooks = []
         self._epoch_hooks = []
+        self._start_train_hooks = []
+        self._end_train_hooks = []
+        self.register_train_epoch_hook(print_epoch_hook)
+        self.register_train_step_hook(print_step_hook)
+        self.register_start_train_hook(print_start_train_hook)
+        self.register_end_train_hook(print_end_train_hook)
 
     def set_seed(self, seed):
         np.random.seed(seed)
@@ -67,8 +75,10 @@ class TrainFrameWork(object):
         self._start_epoch = checkpoint['epoch']
         self._net.load_state_dict(checkpoint['state_dict'])
         self._optimizer.load_state_dict(checkpoint['optimizer'])
+
         print("Loaded model from " + path)
-        if self._start_epoch < self._epoch_num:
+
+        if self._start_epoch >= self._epoch_num:
             raise  Exception("Wrong epoch_num for current loaded model, "
                              "epoch_num : %d, current start_epoch  %d"
                              % (self._epoch_num, self._start_epoch))
@@ -105,8 +115,8 @@ class TrainFrameWork(object):
         sum_loss = 0
         sum_accuracy = 0
         num = 0
-        num_iter = len(dataloader)
-        for iter, (imgs, masks) in enumerate(dataloader):
+        total_step = len(dataloader)
+        for step, (imgs, masks) in enumerate(dataloader):
             # forward
             acc, loss, _ = self.inference(imgs, masks)
             # reset grad
@@ -122,9 +132,7 @@ class TrainFrameWork(object):
             sum_accuracy += acc.item()
 
             # output current state
-            print('\r[{}/{}]       {:.4f}/{:.4f}'
-                  .format(iter, num_iter, loss, acc), end='', flush=True)
-            self._train_step_log_hook(iter, num_iter, loss, acc)
+            self._train_step_log_hook(step, total_step, loss, acc)
         average_loss = sum_loss / num
         average_accruracy = sum_accuracy / num
         return average_loss, average_accruracy
@@ -160,9 +168,9 @@ class TrainFrameWork(object):
         if output_dir is None:
             output_dir = self._save_path
 
-        for epoch in range(self._start_epoch, self._start_epoch + self._epoch_num):
-            print('Epoch      train_loss/ acc      val_loss/acc')
+        self._start_train_hook()
 
+        for epoch in range(self._start_epoch, self._epoch_num):
             # TODO : reduce couple between dataset and dataloader
             # Train train_set
             self._net.train()
@@ -175,8 +183,6 @@ class TrainFrameWork(object):
             val_loss, val_acc = self._validate_net(self._dataloader)
 
             # output info
-            print('\r[{}/{}]     {:.4f}/{:.4f}     {:.4f}/{:.4f}'
-                  .format(epoch, self._epoch_num, average_loss, average_accuracy, val_loss, val_acc), flush=False)
             self._train_epoch_log_hook(epoch, self._epoch_num, average_loss, average_accuracy, val_loss, val_acc)
 
             # save model
@@ -185,9 +191,9 @@ class TrainFrameWork(object):
         # test set
         self._net.eval()
         self._dataset.test_mode()
-        val_loss, val_acc = self._validate_net(self._dataloader)
-        print('\rTest      {:.4f}/{:.4f}     {:.4f}/{:.4f}\n'
-              .format(epoch, self._epoch_num, average_loss, average_accuracy, val_loss, val_acc))
+        if len(self._dataloader) > 0:
+            val_loss, val_acc = self._validate_net(self._dataloader)
+        self._end_train_hook(average_loss, average_accuracy, val_loss, val_acc)
         self.save_model(output_dir, 1000)
 
     def predict(self, imgs):
@@ -214,12 +220,18 @@ class TrainFrameWork(object):
                 output_path = Path(self._save_path + "/" + "criterion_" + str(num))
                 if not output_path.exists():
                     os.mkdir(str(output_path))
-                self.train()
+                    os.mkdir(str(output_path / 'snap'))
+                    os.mkdir(str(output_path / 'checkpoint'))
+                self._net = UNet((1, 256, 256), True).cuda()
+                self._optimizer = Adam(lr=1e-4, params=self._net.parameters(), weight_decay=0.005)
+                self.train(str(output_path))
 
-    """   Log Hooks   """
-    def register_log_train_step_hook(self, hook):
+    """     Almost irrelevant codes.   """
+    """        Don't care about it     """
+    """             Hooks              """
+    """  A very deep hole, Don't jump. """
+    def register_train_step_hook(self, hook):
         self._step_hooks.append(hook)
-
     def unregister_log_train_step_hook(self, hook):
         if hook in self._step_hooks:
             self._step_hooks.remove(hook)
@@ -228,16 +240,34 @@ class TrainFrameWork(object):
         for hook in self._step_hooks:
             hook(iter, num_iter, loss, acc)
 
-    def register_log_train_epoch_hook(self, hook):
+    def register_train_epoch_hook(self, hook):
         self._epoch_hooks.append(hook)
-
     def unregister_log_train_epoch_hook(self, hook):
         if hook in self._epoch_hooks:
             self._epoch_hooks.remove(hook)
-
     def _train_epoch_log_hook(self, epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc):
         for hook in self._epoch_hooks:
             hook(epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc)
+
+    # start train log
+    def register_start_train_hook(self, hook):
+        self._start_train_hooks.append(hook)
+    def unregister_start_train_hook(self, hook):
+        if hook in self._start_train_hooks:
+            self._start_train_hooks.remove(hook)
+    def _start_train_hook(self):
+        for hook in self._start_train_hooks:
+            hook()
+
+    # end train hook
+    def register_end_train_hook(self, hook):
+        self._end_train_hooks.append(hook)
+    def _unregister_end_train_hook(self, hook):
+        if hook in self._end_train_hooks:
+            self._end_train_hooks.remove(hook)
+    def _end_train_hook(self, average_loss, average_accuracy, val_loss, val_acc):
+        for hook in self._end_train_hooks:
+            hook(average_loss, average_accuracy, val_loss, val_acc)
 
 
 

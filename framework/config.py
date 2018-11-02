@@ -4,14 +4,15 @@ from torch.utils.data import DataLoader
 from dataset.transforms import resizeN, random_horizontal_flipN
 from framework.ImageDataSet import ImageDataSet
 from framework.loss import SidedBCELoss
-from framework.trainframe import TrainFrameWork
+from framework.trainframe import TrainFrameWork, get_file_logger
 from modules.UNet import UNet
 
 
 def test_framework():
     # global resized_shape, train_augment, dataset
-    check_out_path = None  # '/data/zj/pycharmProjects/ErrorNet/framework/checkpoint/018.pth'
-    train_path = '/data/zj/data/18_3_6/'
+    check_out_path = None # '/data/zj/data/output/checkpoint/014.pth'
+    train_path = '/data/zj/data/18_3_6/train'
+    test_path = '/data/zj/data/18_3_6/test'
     output_path = '/data/zj/data/output'
     batch_size = 4
     num_epoches = 15
@@ -26,12 +27,16 @@ def test_framework():
         return img, label
 
     # prepare data
-    dataset = ImageDataSet(train_path, transforms=[lambda x, y: train_augment(x, y)], mask_suffix="_1.bmp")
+    dataset = ImageDataSet(path=None,
+                           train_set_path=train_path,
+                           test_set_path=test_path,
+                           transforms=[lambda x, y: train_augment(x, y)], mask_suffix="_1.bmp")
     dataloader = DataLoader(dataset, batch_size, shuffle=True, drop_last=True,
                             num_workers=6, pin_memory=False)
 
     # prepare net
     net = UNet(in_shape, is_bn)
+
     optimizer = Adam(lr=1e-4, params=net.parameters(), weight_decay=0.005)
     criterion = SidedBCELoss(weight=[1, 1], pos_weight=None)
 
@@ -42,25 +47,15 @@ def test_framework():
                                 checkpoint_path=check_out_path,
                                 model_save_path=output_path)
 
-    log_num = 0
-    log = open(output_path + "/log" + str(log_num) + ".txt", "w+")
-    # register hooks
-    def epoch_hook(epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc):
-        nonlocal log, log_num
-        s = '\r[{}/{}]     {:.4f}/{:.4f}     {:.4f}/{:.4f}\n' \
-                  .format(epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc)
-        log.write(s)
-    frame_work.register_log_train_epoch_hook(epoch_hook)
+    file_path = output_path + "/log.txt"
+    frame_work.register_train_epoch_hook(get_file_logger(file_path))
 
-    def step_hook(it, num_iter, loss, acc):
-        nonlocal log
-        s = '\r[{}/{}]       {:.4f}/{:.4f}'.format(it, num_iter, loss, acc)
-        log.write(s)
-    frame_work.register_log_train_step_hook(step_hook)
-
+    # [0.1, 1],
+    # [[0.3, 1], [0.6, 1], [0.9, 1], [1.2, 1], [1.5, 1], [2, 1]],
+    # [0.01, 1]
     config = {
         "criterion": {
-            "value": [[0.1, 1], [0.3, 1], [0.6, 1], [0.9, 1], [1.2, 1], [1.5, 1], [2, 1]],
+            "value": [[10, 1], [100, 1]],
             "func": lambda weight: SidedBCELoss(weight=weight, pos_weight=None)
         },
     }
