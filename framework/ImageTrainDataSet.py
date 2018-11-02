@@ -7,27 +7,67 @@ from torch.utils.data import Dataset, DataLoader
 from dataset.transforms import *
 from pathlib import Path
 
+class ImageTestDataSet(Dataset):
+    def __init__(self, path,
+                 img_suffix=".jpg"):
+        super(ImageTestDataSet, self).__init__()
+        self._img_suffix = img_suffix
+        self._test_set = self._load_img_file_name(path)
 
-class ImageDataSet(Dataset):
+    def _load_img_file_name(self, path):
+        """
+        Return path/**/*.img_suffix
+        """
+        # Search all files in path with suffix is _img_suffix
+        return np.array(glob(str(Path(path) / ("**/*" + self._img_suffix)), recursive=True))
+
+    def _format_img(self, img):
+        if len(img.shape) == 2:
+            img = np.expand_dims(img, axis=0)
+        if img.shape[-1] == 3:
+            img = img.swapaxes(0, 2)
+            img = img.swapaxes(1, 2)
+        return img
+
+    def _get_item(self, index):
+        # get their file names
+        img_file_name = self._test_set[index]
+        img = imread(img_file_name, as_gray=True).astype(np.float32)
+        img = self._format_img(img)
+        intensity_min = np.min(img)
+        intensity_max = np.max(img)
+        img = (img - intensity_min) / (intensity_max - intensity_min)
+        # Convert to tensor
+        img = torch.from_numpy(img).type(torch.FloatTensor)
+        return img, Path(img_file_name).stem
+
+    def __getitem__(self, index):
+        return self._get_item(index)
+
+    def __len__(self):
+        return len(self._test_set)
+
+class ImageTrainDataSet(Dataset):
     def __init__(self, path, mode='train',
                  img_suffix=".jpg", mask_suffix=".bmp", transforms=None,
                  train_ration=0.8, test_ration=0.2, k_fold=None,
                  train_set_path=None, test_set_path=None,
                  seed=22222):
-        super(ImageDataSet, self).__init__()
+        super(ImageTrainDataSet, self).__init__()
         self._img_suffix = img_suffix
         self._mask_suffix = mask_suffix
         self._transforms = transforms
         self._mode = mode
         self._k_fold = k_fold
+        self._need_file_name=False
 
         self._train_set, self._dev_set, self._test_set = None, None, None
 
         # Try optimize this area
-        if train_set_path is not None and test_set_path is not None:
-            # load train test set from specified path directly
-            self._train_set, self._dev_set = self._load_train_test_set_from_path(Path(train_set_path),
-                                                                                  Path(test_set_path))
+        if train_set_path is not None:
+            self._train_set = self._load_img_file_name(Path(train_set_path))
+            if test_set_path is not None:
+                self._dev_set = self._load_img_file_name(Path(test_set_path))
         else:
             if self._path is None:
                 raise Exception("No path found to split file!!")
@@ -54,11 +94,6 @@ class ImageDataSet(Dataset):
         """
         # Search all files in path with suffix is _img_suffix
         return np.array(glob(str(path / ("**/*" + self._img_suffix)), recursive=True))
-
-    def _load_train_test_set_from_path(self, train_set_path, test_set_path):
-        train_set = self._load_img_file_name(train_set_path)
-        test_set = self._load_img_file_name(test_set_path)
-        return train_set, test_set
 
     def _split_files(self, train_ration, test_ration, k_fold, seed):
         """
@@ -95,12 +130,7 @@ class ImageDataSet(Dataset):
         self._train_set = self._train_and_dev_set[train_set_idx]
         self._dev_set = self._train_and_dev_set[dev_set_idx]
 
-    def _get_img_and_label(self, dataset, index):
-        if dataset is None:
-            raise Exception("Error! Do you forget to call next_fold() to generate new data, "
-                            "or use dev_mode() to run in no dev data environment?")
-        # get their file names
-        img_file_name = dataset[index]
+    def _get_img_and_label(self, img_file_name):
         mask_file_name = img_file_name.replace(self._img_suffix, self._mask_suffix)
 
         # load img
@@ -131,8 +161,9 @@ class ImageDataSet(Dataset):
         :param label:  ndarray
         :return:
         """
-        for t in self._transforms:
-            img, label = t(img, label)
+        if self._transforms is not None:
+            for t in self._transforms:
+                img, label = t(img, label)
         return img, label
 
     def _normalize_img_and_label(self, img, label):
@@ -150,8 +181,17 @@ class ImageDataSet(Dataset):
         label = label / 255
         return img, label
 
+    def set_need_file_name(self, need_file_name):
+        self._need_file_name = need_file_name
+
     def _get_item(self, dataset, index):
-        img, label = self._get_img_and_label(dataset, index)
+        if dataset is None:
+            raise Exception("Error! Do you forget to call next_fold() to generate new data, "
+                            "or use dev_mode() to run in no dev data environment?")
+
+        # get their file names
+        img_file_name = dataset[index]
+        img, label = self._get_img_and_label(img_file_name)
         img, label = self._transform_img_and_label(img, label)
         img, label = self._format_img_and_label(img, label)
         img, label = self._normalize_img_and_label(img, label)
@@ -160,7 +200,10 @@ class ImageDataSet(Dataset):
         img = torch.from_numpy(img).type(torch.FloatTensor)
         # Convert to [0 or 1]
         label = torch.from_numpy((label > 0.5).astype(np.float32)).type(torch.FloatTensor)
-        return img, label
+        if self._need_file_name:
+            return img, label, Path(img_file_name).stem
+        else:
+            return img, label
 
     def validate_mode(self):
         self._mode = 'val'
@@ -193,7 +236,8 @@ class ImageDataSet(Dataset):
 
     def __repr__(self):
         return "train set : {}, dev set : {}, test set : {}".format(len(self._train_set),
-                                                                    len(self._dev_set),
+                                                                    len(self._dev_set)
+                                                                    if self._dev_set is not None else "no",
                                                                     len(self._test_set)
                                                                     if self._test_set is not None else "no")
 
@@ -210,8 +254,8 @@ def check_dataset():
         img, label = resizeN([img, label], (512, 512))
         return img, label
 
-    test_data = ImageDataSet('/data/zj/data/ct_kidney/train_yuan/', transforms=[lambda x, y: train_augment(x, y), ],
-                             mode='train')
+    test_data = ImageTrainDataSet('/data/zj/data/ct_kidney/train_yuan/', transforms=[lambda x, y: train_augment(x, y), ],
+                                  mode='train')
     loader = DataLoader(test_data, batch_size=1, num_workers=0)
 
     for it, (img, label) in enumerate(loader):

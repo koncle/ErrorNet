@@ -6,10 +6,11 @@ from torch.utils.data.dataloader import DataLoader
 import numpy as np
 import torch
 
-from framework.ImageDataSet import ImageDataSet
+from framework.ImageTrainDataSet import ImageTrainDataSet
 from modules.UNet import UNet
 from framework.loss import dice_loss, SidedBCELoss, BCELoss2D
 from framework.logger import *
+from framework.file_utils import *
 
 from dataset.transforms import resizeN, random_horizontal_flipN
 from framework.visualize import show_graph
@@ -47,23 +48,24 @@ class TrainFrameWork(object):
             self.load_model(checkpoint_path)
 
         # Log hooks
-        # OH MY GOD
-        self._step_hooks = []
-        self._epoch_hooks = []
-        self._start_train_hooks = []
-        self._end_train_hooks = []
-        self.register_train_epoch_hook(print_epoch_hook)
-        self.register_train_step_hook(print_step_hook)
-        self.register_start_train_hook(print_start_train_hook)
-        self.register_end_train_hook(print_end_train_hook)
+        self._hooks = []
+        self.register_hook(ConsolePrintLogger())
+
 
     def set_seed(self, seed):
         np.random.seed(seed)
         torch.manual_seed(seed)
         torch.cuda.manual_seed(seed)
 
-    def save_model(self, path, epoch):
-        torch.save(self._net.state_dict(), path + '/snap/%03d.pth' % epoch)
+    def save_model(self, path):
+        torch.save({
+            'state_dict': self._net.state_dict(),
+            'optimizer': self._optimizer.state_dict(),
+            'epoch': 1000,
+        }, path)
+
+    def _save_model(self, path, epoch):
+        # print("Saved model to " + path)
         torch.save({
             'state_dict': self._net.state_dict(),
             'optimizer': self._optimizer.state_dict(),
@@ -78,10 +80,13 @@ class TrainFrameWork(object):
 
         print("Loaded model from " + path)
 
+        if self._start_epoch == 1000:
+            return
+
         if self._start_epoch >= self._epoch_num:
-            raise  Exception("Wrong epoch_num for current loaded model, "
-                             "epoch_num : %d, current start_epoch  %d"
-                             % (self._epoch_num, self._start_epoch))
+            raise Exception("Wrong epoch_num for current loaded model, "
+                            "epoch_num : %d, current start_epoch  %d"
+                            % (self._epoch_num, self._start_epoch))
 
     def inference(self, imgs, masks):
         imgs = Variable(imgs)
@@ -112,6 +117,9 @@ class TrainFrameWork(object):
         :return:
         """
         # prepare for calculating loss and accuracy
+        self._net.train()
+        self._dataset.train_mode()
+
         sum_loss = 0
         sum_accuracy = 0
         num = 0
@@ -143,6 +151,7 @@ class TrainFrameWork(object):
         :param dataloader:  a  dataloader, it should be set to run in validate mode
         :return:
         """
+        self._net.eval()
         sum_loss = 0
         sum_accuracy = 0
         num = 0
@@ -173,12 +182,9 @@ class TrainFrameWork(object):
         for epoch in range(self._start_epoch, self._epoch_num):
             # TODO : reduce couple between dataset and dataloader
             # Train train_set
-            self._net.train()
-            self._dataset.train_mode()
             average_loss, average_accuracy = self._train_net(self._dataloader)
 
             # validate set
-            self._net.eval()
             self._dataset.validate_mode()
             val_loss, val_acc = self._validate_net(self._dataloader)
 
@@ -186,15 +192,14 @@ class TrainFrameWork(object):
             self._train_epoch_log_hook(epoch, self._epoch_num, average_loss, average_accuracy, val_loss, val_acc)
 
             # save model
-            self.save_model(output_dir, epoch)
+            self._save_model(output_dir, epoch)
 
         # test set
-        self._net.eval()
         self._dataset.test_mode()
         if len(self._dataloader) > 0:
             val_loss, val_acc = self._validate_net(self._dataloader)
         self._end_train_hook(average_loss, average_accuracy, val_loss, val_acc)
-        self.save_model(output_dir, 1000)
+        self._save_model(output_dir, 1000)
 
     def predict(self, imgs):
         imgs = Variable(imgs)
@@ -203,71 +208,33 @@ class TrainFrameWork(object):
         logits = self._net(imgs)
         return torch.round(torch.sigmoid(logits)).detach().cpu().numpy()
 
-    def set_config(self, config):
-        self._config = config
+    """        A Clean Hook Implementation              """
+    def register_hook(self, hook):
+        self._hooks.append(hook)
 
-    def start_config(self):
-        if self._config is None:
-            raise Exception("You should set config first!!!")
-
-        if "criterion" in self._config.keys():
-            dic = self._config["criterion"]
-            func = dic["func"]
-            for num, v in enumerate(dic["value"]):
-                print("Trying parameter " + "criterion " + str(v))
-                self._criterion = func(v)
-
-                output_path = Path(self._save_path + "/" + "criterion_" + str(num))
-                if not output_path.exists():
-                    os.mkdir(str(output_path))
-                    os.mkdir(str(output_path / 'snap'))
-                    os.mkdir(str(output_path / 'checkpoint'))
-                self._net = UNet((1, 256, 256), True).cuda()
-                self._optimizer = Adam(lr=1e-4, params=self._net.parameters(), weight_decay=0.005)
-                self.train(str(output_path))
-
-    """     Almost irrelevant codes.   """
-    """        Don't care about it     """
-    """             Hooks              """
-    """  A very deep hole, Don't jump. """
-    def register_train_step_hook(self, hook):
-        self._step_hooks.append(hook)
-    def unregister_log_train_step_hook(self, hook):
-        if hook in self._step_hooks:
-            self._step_hooks.remove(hook)
+    def unregister_hook(self, hook):
+        if hook in self._hooks:
+            self._hooks.remove(hook)
 
     def _train_step_log_hook(self, iter, num_iter, loss, acc):
-        for hook in self._step_hooks:
-            hook(iter, num_iter, loss, acc)
+        for hook in self._hooks:
+            if hasattr(hook, "train_step_hook"):
+                hook.train_step_hook(iter, num_iter, loss, acc)
 
-    def register_train_epoch_hook(self, hook):
-        self._epoch_hooks.append(hook)
-    def unregister_log_train_epoch_hook(self, hook):
-        if hook in self._epoch_hooks:
-            self._epoch_hooks.remove(hook)
     def _train_epoch_log_hook(self, epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc):
-        for hook in self._epoch_hooks:
-            hook(epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc)
+        for hook in self._hooks:
+            if hasattr(hook, "train_epoch_hook"):
+                hook.train_epoch_hook(epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc)
 
-    # start train log
-    def register_start_train_hook(self, hook):
-        self._start_train_hooks.append(hook)
-    def unregister_start_train_hook(self, hook):
-        if hook in self._start_train_hooks:
-            self._start_train_hooks.remove(hook)
     def _start_train_hook(self):
-        for hook in self._start_train_hooks:
-            hook()
+        for hook in self._hooks:
+            if hasattr(hook, "start_train_hook"):
+                hook.start_train_hook()
 
-    # end train hook
-    def register_end_train_hook(self, hook):
-        self._end_train_hooks.append(hook)
-    def _unregister_end_train_hook(self, hook):
-        if hook in self._end_train_hooks:
-            self._end_train_hooks.remove(hook)
     def _end_train_hook(self, average_loss, average_accuracy, val_loss, val_acc):
-        for hook in self._end_train_hooks:
-            hook(average_loss, average_accuracy, val_loss, val_acc)
+        for hook in self._hooks:
+            if hasattr(hook, "end_train_hook"):
+                hook.end_train_hook(average_loss, average_accuracy, val_loss, val_acc)
 
 
 
@@ -288,7 +255,7 @@ def test_framework():
         return img, label
 
     # prepare data
-    dataset = ImageDataSet(train_path, transforms=[lambda x, y: train_augment(x, y)], mask_suffix="_1.bmp")
+    dataset = ImageTrainDataSet(train_path, transforms=[lambda x, y: train_augment(x, y)], mask_suffix="_1.bmp")
     dataloader = DataLoader(dataset, batch_size, shuffle=True, drop_last=True,
                             num_workers=6, pin_memory=False)
     # prepare net
