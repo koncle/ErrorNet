@@ -9,9 +9,11 @@ from framework.ImageTrainDataSet import ImageTrainDataSet, ImageTestDataSet
 from framework.logger import FileLogger
 from framework.loss import SidedBCELoss
 from framework.trainframe import TrainFrameWork, create_dir_if_not_exist
+from framework.visualize import show_output_imgs
 from modules.UNet import UNet
 
 from skimage.io import imread, imsave
+
 
 class ParameterConfig(object):
     def __init__(self, train_framework, config, output_path):
@@ -44,10 +46,10 @@ class ParameterConfig(object):
                 create_dir_if_not_exist(output_path / 'checkpoint')
 
                 with FileLogger(str(output_path / 'log.txt'), self._train_framework):
-                    self._train_framework.net = new_net_func()
-                    self._train_framework.optimizer = new_opt_func(self._train_framework.net)
+                    self._train_framework._net = new_net_func()
+                    self._train_framework._optimizer = new_opt_func(self._train_framework._net)
                     self._train_framework.train(str(output_path))
-                    self._train_framework.save_model(final_model_output_path + '/' + "criterion_" + str(v))
+                    self._train_framework.save_model(final_model_output_path + '/' + "criterion_" + str(v) +".pth")
 
 
     def test_imgs_and_save_result(self, model, dataset, output_path):
@@ -117,11 +119,12 @@ def test_framework():
     return frame_work
 
 def config_train(frame_work):
+    # [0.005, 1],[0.01, 1], [0.1, 1], [0.3, 1], [0.6, 1], [0.9, 1],
     config = {
         "net": lambda: UNet((1, 256, 256), True).cuda(),
         "opt": lambda net: Adam(lr=1e-4, params=net.parameters(), weight_decay=0.005),
         "criterion": {
-            "value": [[0.005, 1], [0.01, 1], [0.1, 1], [0.3, 1], [0.6, 1], [0.9, 1], [1.2, 1], [1.5, 1], [2, 1], [4, 1], [6, 1]],
+            "value": [[1.2, 1], [1.5, 1], [2, 1], [4, 1], [6, 1]],
             "func": lambda weight: SidedBCELoss(weight=weight, pos_weight=None)
         },
         "learning_rate": {
@@ -132,14 +135,15 @@ def config_train(frame_work):
     output_path = '/data/zj/data/output'
     models_path = '/data/zj/data/models'
     parameterConfig = ParameterConfig(train_framework=frame_work, config=config, output_path=output_path)
-    parameterConfig.start_parameter_selecting(models_path)
-
+    # parameterConfig.start_parameter_selecting(models_path)
 
     small_test_path = '/data/zj/data/small_test_1'
     test_dataset = ImageTestDataSet(path=small_test_path)
     parameterConfig.test_imgs_and_save_result_with_different_models(models_path, test_dataset, small_test_path)
 
 
+
 if __name__ == '__main__':
     framework = test_framework()
     config_train(framework)
+    show_output_imgs()
