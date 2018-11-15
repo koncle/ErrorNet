@@ -16,6 +16,7 @@ def bce_loss(logits, labels):
     return BCELoss2D()(logits, labels)
 
 def dice_loss(pred, labels, is_average=True):
+    pred = torch.round(torch.sigmoid(pred))
     num = labels.size(0)
     m1 = pred.view(num, -1)
     m2 = labels.view(num, -1)
@@ -29,20 +30,23 @@ def dice_loss(pred, labels, is_average=True):
 
 
 class SidedBCELoss(nn.Module):
-    def __init__(self, pos_weight, weight):
+    def __init__(self, pos_weight, weight, area_weight):
         super(SidedBCELoss, self).__init__()
         self.weight = weight
         self.pos_weight = pos_weight
+        self.area_weight = area_weight
 
     def forward(self, inputs, target):
         inputs = inputs.view(-1)
         target = target.view(-1)
         max_val = (-inputs).clamp(min=0)
+        area_loss = self.area_weight * inputs.sum() / target.sum()
+        aggregation_extend = torch.sqrt(inputs-inputs.mean().pow(2).sum())
         if self.pos_weight is None:
-            loss = inputs - inputs * target + max_val + ((-max_val).exp() + (-inputs - max_val).exp()).log()
+            loss = inputs - inputs * target + max_val + ((-max_val).exp() + (-inputs - max_val).exp()).log() + area_loss
         else:
             log_weight = 1 + (self.pos_weight - 1) * target
-            loss = inputs - inputs * target + log_weight * (max_val + ((-max_val).exp() + (-inputs - max_val).exp()).log())
+            loss = inputs - inputs * target + log_weight * (max_val + ((-max_val).exp() + (-inputs - max_val).exp()).log()) + area_loss
         if self.weight is None:
             return loss.mean()
         else:

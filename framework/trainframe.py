@@ -6,7 +6,7 @@ from torch.utils.data.dataloader import DataLoader
 import numpy as np
 import torch
 
-from framework.ImageTrainDataSet import ImageTrainDataSet
+from framework.DataSet import Image2ImageTrainDataSet
 from modules.UNet import UNet
 from framework.loss import dice_loss, SidedBCELoss, BCELoss2D
 from framework.logger import *
@@ -17,15 +17,27 @@ from framework.visualize import show_graph
 
 
 class TrainFrameWork(object):
-    def __init__(self, dataset, data_loader, net, optimizer, criterion=BCELoss2D(),
-                 epoch=20, checkpoint_path=None, model_save_path="./",
-                 seed=23202, cuda=True, show_graph=False):
+    def __init__(self, dataset, data_loader, net=None, optimizer=None,
+                 loss_func=BCELoss2D(), evaluate_func=dice_loss,
+                 epoch=20, load_model_path=None, save_model_path="./",
+                 seed=23202, cuda=True):
+        """
+        :param dataset:  dataset is the set used to get data_loader
+        :param data_loader:      is a dataloader provided by pytorch
+        :param net:              is your network
+        :param optimizer:        is your optimizer
+        :param loss_func:        is your criterion
+        :param epoch:            is your trianing epoch
+        :param load_model_path:  is where you load your model
+        :param save_model_path:  is where to save your model
+        :param seed:             is the random seed
+        :param cuda:             whether use cuda
+        """
         # basic
-        self._save_path = model_save_path
+        self._save_path = save_model_path
         self._epoch_num = epoch
         self._start_epoch = 0
         self._cuda = cuda
-        self._show_graph = show_graph
         self._very_very_detail = None
 
         # Random Setting
@@ -36,21 +48,22 @@ class TrainFrameWork(object):
         # net
         self._optimizer = optimizer
         self._net = net
+        self._best_net = None
+        self._best_optimizer = None
 
         # loss
-        self._evaluate = dice_loss
-        self._criterion = criterion
+        self._evaluate = evaluate_func
+        self._loss_func = loss_func
 
-        if cuda:
+        if self._net is not None and cuda:
             self._net = self._net.cuda()
 
-        if checkpoint_path is not None:
-            self.load_model(checkpoint_path)
+        if load_model_path is not None:
+            self.load_model(load_model_path)
 
         # Log hooks
         self._hooks = []
         self.register_hook(ConsolePrintLogger())
-
 
     def set_seed(self, seed):
         np.random.seed(seed)
@@ -58,19 +71,16 @@ class TrainFrameWork(object):
         torch.cuda.manual_seed(seed)
 
     def save_model(self, path):
-        torch.save({
-            'state_dict': self._net.state_dict(),
-            'optimizer': self._optimizer.state_dict(),
-            'epoch': 1000,
-        }, path)
+        self._save_model(path, 1000)
 
     def _save_model(self, path, epoch):
         # print("Saved model to " + path)
+        path = Path(path)
         torch.save({
             'state_dict': self._net.state_dict(),
             'optimizer': self._optimizer.state_dict(),
             'epoch': epoch,
-        }, path + '/checkpoint/%03d.pth' % epoch)
+        }, path / ('%03d.pth' % epoch))
 
     def load_model(self, path):
         checkpoint = torch.load(path)
@@ -88,26 +98,23 @@ class TrainFrameWork(object):
                             "epoch_num : %d, current start_epoch  %d"
                             % (self._epoch_num, self._start_epoch))
 
-    def inference(self, imgs, masks):
-        imgs = Variable(imgs)
-        masks = Variable(masks)
+    def inference(self, input, label):
+        input = Variable(input)
+        label = Variable(label)
         if self._cuda:
-            imgs = imgs.cuda()
-            masks = masks.cuda()
-        logits = self._net(imgs)
-        pred = torch.round(torch.sigmoid(logits))
+            input = input.cuda()
+            label = label.cuda()
 
-        # show img, prediction, mask with a small probability
-        # in every procedure
-        if self._very_very_detail is not None:
-            very_detail_rate = 0.1
-            if np.random.rand() < very_detail_rate:
-                show_graph(imgs[0, 0, ...], pred.cpu().detach().numpy()[0, 0, ...], masks[0, 0, ...])
+        logits = self._net(input)
+
+        # logger
+        self._inference_hook(input, label, logits)
 
         # get accuracy with dice_loss
-        acc = self._evaluate(pred, masks)
+        acc = self._evaluate(logits, label)
         # calculate loss by user
-        loss = self._criterion(logits, masks)
+        loss = self._loss_func(logits, label)
+
         return acc, loss, logits
 
     def _train_net(self, dataloader):
@@ -124,16 +131,15 @@ class TrainFrameWork(object):
         sum_accuracy = 0
         num = 0
         total_step = len(dataloader)
-        for step, (imgs, masks) in enumerate(dataloader):
+        for step, (batch_x, batch_y) in enumerate(dataloader):
             # forward
-            acc, loss, _ = self.inference(imgs, masks)
+            acc, loss, _ = self.inference(batch_x, batch_y)
             # reset grad
             self._optimizer.zero_grad()
             # backward
             loss.backward()
             # update
             self._optimizer.step()
-
             # calculate total loss and accuracy
             num += 1
             sum_loss += loss.item()
@@ -141,9 +147,10 @@ class TrainFrameWork(object):
 
             # output current state
             self._train_step_log_hook(step, total_step, loss, acc)
+
         average_loss = sum_loss / num
-        average_accruracy = sum_accuracy / num
-        return average_loss, average_accruracy
+        average_accuracy = sum_accuracy / num
+        return average_loss, average_accuracy
 
     def _validate_net(self, dataloader):
         """
@@ -155,19 +162,12 @@ class TrainFrameWork(object):
         sum_loss = 0
         sum_accuracy = 0
         num = 0
-        show = True
-        for step, (imgs, masks) in enumerate(dataloader):
-            acc, loss, logits = self.inference(imgs, masks)
-
-            if self._show_graph and show:
-                pred = torch.round(torch.sigmoid(logits))
-                show_graph(imgs[0, 0, ...], pred.cpu().detach().numpy()[0, 0, ...], masks[0, 0, ...])
-                # only show once in a validation process
-                show = False
-
+        for step, (batch_x, batch_y) in enumerate(dataloader):
+            acc, loss, logits = self.inference(batch_x, batch_y)
             num += 1
             sum_loss += loss.item()
             sum_accuracy += acc.item()
+            self._validate_hook(batch_x, batch_y, logits)
 
         average_loss = sum_loss / num
         average_accuracy = sum_accuracy / num
@@ -177,11 +177,26 @@ class TrainFrameWork(object):
         if output_dir is None:
             output_dir = self._save_path
 
+        if self._cuda:
+            self._net.cuda()
+
+        best_accuracy = 0
+
+        # create folder to save checkpoints
+        output_dir = Path(output_dir)
+        output_model_dir = output_dir / 'checkpoint'
+        best_model_dir = output_dir / 'best'
+        create_dir_if_not_exist(output_dir)
+        create_dir_if_not_exist(output_model_dir)
+        create_dir_if_not_exist(best_model_dir)
+
+        # start train log
         self._start_train_hook()
 
         for epoch in range(self._start_epoch, self._epoch_num):
             # TODO : reduce couple between dataset and dataloader
             # Train train_set
+            self._dataset.train_mode()
             average_loss, average_accuracy = self._train_net(self._dataloader)
 
             # validate set
@@ -192,14 +207,18 @@ class TrainFrameWork(object):
             self._train_epoch_log_hook(epoch, self._epoch_num, average_loss, average_accuracy, val_loss, val_acc)
 
             # save model
-            self._save_model(output_dir, epoch)
+            self._save_model(output_model_dir, epoch)
+
+            if best_accuracy < val_acc:
+                best_accuracy = val_acc
+                self._save_model(best_model_dir, 1000)
 
         # test set
         self._dataset.test_mode()
         if len(self._dataloader) > 0:
             val_loss, val_acc = self._validate_net(self._dataloader)
+
         self._end_train_hook(average_loss, average_accuracy, val_loss, val_acc)
-        self._save_model(output_dir, 1000)
 
     def predict(self, imgs):
         imgs = Variable(imgs)
@@ -236,6 +255,15 @@ class TrainFrameWork(object):
             if hasattr(hook, "end_train_hook"):
                 hook.end_train_hook(average_loss, average_accuracy, val_loss, val_acc)
 
+    def _inference_hook(self, input, label, logits):
+        for hook in self._hooks:
+            if hasattr(hook, "inference_hook"):
+                hook.inference_hook(input, label, logits)
+
+    def _validate_hook(self, input, label, logits):
+        for hook in self._hooks:
+            if hasattr(hook, "validate_hook"):
+                hook.validate_hook(input, label, logits)
 
 
 def test_framework():
@@ -255,7 +283,7 @@ def test_framework():
         return img, label
 
     # prepare data
-    dataset = ImageTrainDataSet(train_path, transforms=[lambda x, y: train_augment(x, y)], mask_suffix="_1.bmp")
+    dataset = Image2ImageTrainDataSet(train_path, transforms=[lambda x, y: train_augment(x, y)], mask_suffix="_1.bmp")
     dataloader = DataLoader(dataset, batch_size, shuffle=True, drop_last=True,
                             num_workers=6, pin_memory=False)
     # prepare net
@@ -266,7 +294,7 @@ def test_framework():
     frame_work = TrainFrameWork(dataset, dataloader,
                                 net, optimizer, criterion,
                                 epoch=num_epoches, show_graph=True,
-                                checkpoint_path=check_out_path)
+                                load_model_path=check_out_path)
     # train
     frame_work.train()
 

@@ -1,33 +1,7 @@
-# Hooks for output
-def print_epoch_hook(epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc):
-    print('\r[{}/{}]     {:.4f}/{:.4f}     {:.4f}/{:.4f}'
-          .format(epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc), flush=False)
+import torch
+import numpy as np
 
-
-def print_step_hook(it, num_iter, loss, acc):
-    print('\r[{}/{}]       {:.4f}/{:.4f}'.format(it, num_iter, loss, acc), end='', flush=True)
-
-
-def print_start_train_hook():
-    print('Epoch      train_loss/ acc      val_loss/acc')
-
-
-def print_end_train_hook(average_loss, average_accuracy, val_loss, val_acc):
-    print('\rTest      {:.4f}/{:.4f}     {:.4f}/{:.4f}\n'
-          .format(average_loss, average_accuracy, val_loss, val_acc))
-
-
-def get_file_logger(file_path):
-    log = open(file_path, "w+")
-
-    # register hooks
-    def epoch_hook(epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc):
-        nonlocal log
-        s = '\r[{}/{}]     {:.4f}/{:.4f}     {:.4f}/{:.4f}'.format(epoch, total_epoch, average_loss, average_accuracy,
-                                                                   val_loss, val_acc)
-        log.write(s)
-
-    return epoch_hook
+from framework.visualize import show_graph
 
 
 class BaseLogger(object):
@@ -35,6 +9,12 @@ class BaseLogger(object):
         pass
 
     def train_step_hook(self, it, num_iter, loss, acc):
+        pass
+
+    def inference_hook(self, input, label, logits):
+        pass
+
+    def validate_hook(self, input, label, logits):
         pass
 
     def start_train_hook(self):
@@ -45,15 +25,15 @@ class BaseLogger(object):
 
 
 class ConsolePrintLogger(BaseLogger):
+    def start_train_hook(self):
+        print('Epoch      train_loss/ acc      val_loss/acc')
+
     def train_epoch_hook(self, epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc):
         print('\r[{}/{}]     {:.4f}/{:.4f}     {:.4f}/{:.4f}'
               .format(epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc), flush=False)
 
     def train_step_hook(self, it, num_iter, loss, acc):
         print('\r[{}/{}]       {:.4f}/{:.4f}'.format(it, num_iter, loss, acc), end='', flush=True)
-
-    def start_train_hook(self):
-        print('Epoch      train_loss/ acc      val_loss/acc')
 
     def end_train_hook(self, average_loss, average_accuracy, val_loss, val_acc):
         print('\rTest      {:.4f}/{:.4f}     {:.4f}/{:.4f}\n'
@@ -88,3 +68,21 @@ class FileLogger(BaseLogger):
         self._log.close()
 
 
+class ImageShowLogger(BaseLogger):
+    def __init__(self):
+        self.show = True
+
+    def train_epoch_hook(self, epoch, total_epoch, average_loss, average_accuracy, val_loss, val_acc):
+        self.show = True
+
+    def validate_hook(self, input, label, logits):
+        if self.show:
+            pred = torch.round(torch.sigmoid(logits))
+            show_graph(input[0, 0, ...], pred.cpu().detach().numpy()[0, 0, ...], label[0, 0, ...])
+            # only show once in a validation process
+        self.show = False
+
+    def inference_hook(self, input, label, logits):
+        # pred = torch.round(torch.sigmoid(logits))
+        # show_graph(input[3, 0, ...], pred.cpu().detach().numpy()[3, 0, ...], label[3, 0, ...])
+        pass

@@ -6,7 +6,7 @@ from modules.model_helper import DoubleConv, Up, Down
 class UNet(nn.Module):
     def __init__(self, in_channels, num_classes):
         super(UNet, self).__init__()
-        self.DEBUG = True
+        self.DEBUG = False
         self.down0 = DoubleConv(in_channels, 64)
         self.down1 = Down(64, 128)
         self.down2 = Down(128, 256)
@@ -29,10 +29,12 @@ class UNet(nn.Module):
         down2 = self.down2(down1)
         down3 = self.down3(down2)
         down4 = self.down4(self.dropout3(down3))
+
         up3 = self.up3(self.dropout4(down4), down3)
         up2 = self.up2(up3, down2)
         up1 = self.up1(up2, down1)
         up0 = self.up0(up1, down0)
+
         out_value = self.conv_out(up0)
 
         if self.DEBUG:
@@ -46,7 +48,8 @@ class UNet(nn.Module):
             print(up1.size())
             print(up0.size())
             print(out_value.size())
-        return self.softmax(out_value)
+
+        return out_value
 
 if __name__ == '__main__':
     unet = UNet(1, 1).cuda()

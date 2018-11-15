@@ -7,10 +7,10 @@ class DoubleConv(nn.Module):
     def __init__(self, in_ch, out_ch):
         super(DoubleConv, self).__init__()
         self.double_conv = nn.Sequential(
-            nn.Conv2d(in_channels=in_ch, out_channels=out_ch, kernel_size=3),
+            nn.Conv2d(in_channels=in_ch, out_channels=out_ch, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_ch),
             nn.ReLU(),
-            nn.Conv2d(in_channels=out_ch, out_channels=out_ch, kernel_size=3),
+            nn.Conv2d(in_channels=out_ch, out_channels=out_ch, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_ch),
             nn.ReLU()
         )
@@ -24,15 +24,18 @@ class Up(nn.Module):
         super(Up, self).__init__()
         self.up = nn.ConvTranspose2d(in_channels=in_channels, out_channels=out_channels, kernel_size=2, stride=2)
         self.double_conv = DoubleConv(in_channels, out_channels)
+
+        self.conv_1_1 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, stride=1)
         self.interpolate = interpolate
 
     def forward(self, to_up, down):
         if self.interpolate:
-            up = F.interpolate(to_up, down.size()[2:], mode="bilinear")
+            up = F.interpolate(to_up, down.size()[2:], align_corners=True, mode="bilinear")
+            up = self.conv_1_1(up)
             cropped_down = down
         else:
             up = self.up(to_up)
-            cropped_down = self.crop_to_same_size(down, up)
+            cropped_down = down # self.crop_to_same_size(down, up)
         concatenated_var = torch.cat([cropped_down, up], dim=1)
         return self.double_conv(concatenated_var)
 

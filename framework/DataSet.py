@@ -47,13 +47,72 @@ class ImageTestDataSet(Dataset):
     def __len__(self):
         return len(self._test_set)
 
-class ImageTrainDataSet(Dataset):
+
+class SimpleImageDataSet(Dataset):
+    def __init__(self, path, img_suffix=".jpg", transforms=None,
+                 seed=22222):
+        super(SimpleImageDataSet, self).__init__()
+        self._img_suffix = img_suffix
+        self._transforms = transforms
+
+        self._data, self._dev_set, self._test_set = None, None, None
+
+        np.random.seed(seed)
+        # Try optimize this area
+        if path is not None:
+            self._data = self._load_img_file_name(Path(path))
+            np.random.shuffle(self._data)
+        else:
+            raise Exception("None path specified!!")
+        print(self)
+
+    def _load_img_file_name(self, path):
+        """
+        Return path/**/*.img_suffix
+        """
+        # Search all files in path with suffix is _img_suffix
+        return np.array(glob(str(path / ("**/*" + self._img_suffix)), recursive=True))
+
+    def _format_img(self, img):
+        if len(img.shape) == 2:
+            img = np.expand_dims(img, axis=0)
+        if img.shape[-1] == 3:
+            img = img.swapaxes(0, 2)
+            img = img.swapaxes(1, 2)
+        return img
+
+    def _get_item(self, dataset, index):
+        # get their file names
+        img_file_name = dataset[index]
+        # load img
+        img = imread(img_file_name, as_gray=True).astype(np.float32)
+        if self._transforms is not None:
+            for t in self._transforms:
+                img = t(img)
+
+        img = self._format_img(img)
+
+        # Convert to tensor
+        img = torch.from_numpy(img).type(torch.FloatTensor)
+        return img
+
+    def __getitem__(self, index):
+        return self._get_item(self._data, index)
+
+    def __len__(self):
+        return len(self._data)
+
+    def __repr__(self):
+        return "data set : {}".format(len(self._data))
+
+
+class Image2ImageTrainDataSet(Dataset):
     def __init__(self, path, mode='train',
                  img_suffix=".jpg", mask_suffix=".bmp", transforms=None,
                  train_ration=0.8, test_ration=0.2, k_fold=None,
                  train_set_path=None, test_set_path=None,
                  seed=22222):
-        super(ImageTrainDataSet, self).__init__()
+        super(Image2ImageTrainDataSet, self).__init__()
         self._img_suffix = img_suffix
         self._mask_suffix = mask_suffix
         self._transforms = transforms
@@ -69,7 +128,7 @@ class ImageTrainDataSet(Dataset):
             if test_set_path is not None:
                 self._dev_set = self._load_img_file_name(Path(test_set_path))
         else:
-            if self._path is None:
+            if path is None:
                 raise Exception("No path found to split file!!")
             self._path = Path(path)
             # Split train test set from a whole file
@@ -199,7 +258,7 @@ class ImageTrainDataSet(Dataset):
         # Convert to tensor
         img = torch.from_numpy(img).type(torch.FloatTensor)
         # Convert to [0 or 1]
-        label = torch.from_numpy((label > 0.5).astype(np.float32)).type(torch.FloatTensor)
+        label = torch.from_numpy((label > 0).astype(np.float32)).type(torch.FloatTensor)
         if self._need_file_name:
             return img, label, Path(img_file_name).stem
         else:
@@ -254,8 +313,8 @@ def check_dataset():
         img, label = resizeN([img, label], (512, 512))
         return img, label
 
-    test_data = ImageTrainDataSet('/data/zj/data/ct_kidney/train_yuan/', transforms=[lambda x, y: train_augment(x, y), ],
-                                  mode='train')
+    test_data = Image2ImageTrainDataSet('/data/zj/data/ct_kidney/train_yuan/', transforms=[lambda x, y: train_augment(x, y), ],
+                                        mode='train')
     loader = DataLoader(test_data, batch_size=1, num_workers=0)
 
     for it, (img, label) in enumerate(loader):

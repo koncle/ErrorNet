@@ -17,6 +17,8 @@ def show_graphs(imgs, titles=None):
 
 
 def show_graph_with_col(imgs, max_cols, titles=None):
+    if len(imgs) == 0:
+        return
     length = len(imgs)
     if length < max_cols:
         max_cols = length
@@ -50,8 +52,8 @@ def show_contour(img):
 def show_output_imgs():
     src_path = '/data/zj/data/small_test'
     target_path = '/data/zj/data/small_test_1'
-    src_imgs = np.array(glob(src_path + '/**/*.jpg', recursive=True))
-    s1 = "criterion_"
+    src_imgs = np.array(glob(target_path + '/**/*.jpg', recursive=True))
+    s1 = "param_"
     for img_file in src_imgs:
         img_path = Path(img_file)
         img_path_list = glob(target_path + "/" + img_path.stem + "**.*")
@@ -60,7 +62,10 @@ def show_output_imgs():
         images = []
         for i in range(len(img_path_list)):
             images.append(imread(img_path_list[i]))
-            title = Path(img_path_list[i]).stem.replace(img_path.stem, "").replace(s1, "")
+            title = Path(img_path_list[i]).stem.replace(img_path.stem+"_", "").replace(s1, "")
+            if title.startswith('('):
+                tmp = eval(title)
+                title = str(tmp[0])
             titles.append(title)
         show_graphs(images, titles)
 
