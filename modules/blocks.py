@@ -5,9 +5,9 @@ import torch.nn.functional as F
 BN_EPS = 1e-4
 
 
-class ConvBnRelu2d(nn.Module):
+class ConvBnRelu(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, padding=1, dilation=1, stride=1, groups=1, is_bn=True,
-                 is_relu=True):
+                 is_relu=True, d3=False):
         """
         Convolution + Batch Norm + Relu for 2D feature maps
         :param in_channels:
@@ -20,10 +20,16 @@ class ConvBnRelu2d(nn.Module):
         :param is_bn:
         :param is_relu:
         """
-        super(ConvBnRelu2d, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, padding=padding, stride=stride,
+        super(ConvBnRelu, self).__init__()
+        if d3:
+            self.conv = nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding,
+                                  dilation=dilation, groups=groups, bias=True)
+            self.bn = nn.BatchNorm3d(out_channels, eps=BN_EPS)
+        else:
+            self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, padding=padding, stride=stride,
                               dilation=dilation, groups=groups, bias=False)
-        self.bn = nn.BatchNorm2d(out_channels, eps=BN_EPS)
+            self.bn = nn.BatchNorm2d(out_channels, eps=BN_EPS)
+
         self.relu = nn.ReLU(inplace=True)
         if is_bn is False:
             self.bn = None
@@ -73,37 +79,46 @@ class ConvBnRelu2d(nn.Module):
 
 
 class StackEncoder(nn.Module):
-    def __init__(self, x_channels, y_channels, kernel_size, is_bn=True):
+    def __init__(self, x_channels, y_channels, kernel_size, is_bn=True, d3=False):
         super(StackEncoder, self).__init__()
         padding = (kernel_size - 1) // 2
         self.encode = nn.Sequential(
-            ConvBnRelu2d(x_channels, y_channels, kernel_size=kernel_size, padding=padding, dilation=1, stride=1,
-                         groups=1, is_bn=is_bn),
-            ConvBnRelu2d(y_channels, y_channels, kernel_size=kernel_size, padding=padding, dilation=1, stride=1,
-                         groups=1, is_bn=is_bn)
+            ConvBnRelu(x_channels, y_channels, kernel_size=kernel_size, padding=padding, dilation=1, stride=1,
+                       groups=1, is_bn=is_bn, d3=d3),
+            ConvBnRelu(y_channels, y_channels, kernel_size=kernel_size, padding=padding, dilation=1, stride=1,
+                       groups=1, is_bn=is_bn, d3=d3)
         )
+        if d3:
+            self.max_pool = nn.MaxPool3d(kernel_size=2, stride=2)
+        else:
+            self.max_pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
     def forward(self, x):
         x = self.encode(x)
-        x_small = F.max_pool2d(x, kernel_size=2, stride=2)
+        x_small = self.max_pool(x) #F.max_pool2d(x, kernel_size=2, stride=2)
         return x, x_small
 
 
 class StackDecoder(nn.Module):
-    def __init__(self, x_big_channels, x_channels, y_channels, kernel_size=3, is_bn=True):
+    def __init__(self, x_big_channels, x_channels, y_channels, kernel_size=3, is_bn=True, d3=False):
         super(StackDecoder, self).__init__()
+        self.d3 = d3
         padding = (kernel_size - 1) // 2
 
         self.decode = nn.Sequential(
-            ConvBnRelu2d(x_big_channels + x_channels, y_channels, kernel_size=kernel_size, padding=padding, dilation=1,
-                         stride=1, groups=1, is_bn=is_bn),
-            ConvBnRelu2d(y_channels, y_channels, kernel_size=kernel_size, padding=padding, dilation=1, stride=1,
-                         groups=1, is_bn=is_bn)
+            ConvBnRelu(x_big_channels + x_channels, y_channels, kernel_size=kernel_size, padding=padding, dilation=1,
+                       stride=1, groups=1, is_bn=is_bn, d3=d3),
+            ConvBnRelu(y_channels, y_channels, kernel_size=kernel_size, padding=padding, dilation=1, stride=1,
+                       groups=1, is_bn=is_bn, d3=d3)
         )
 
     def forward(self, x_big, x):
-        N, C, H, W = x_big.size()
-        y = F.interpolate(x, size=(H, W), align_corners=False, mode='bilinear')
+        if self.d3:
+            N, C, D, H, W = x_big.size()
+            y = F.interpolate(x, size=(D, H, W), align_corners=False, mode='trilinear')
+        else:
+            N, C, H, W = x_big.size()
+            y = F.interpolate(x, size=(H, W), align_corners=False, mode='bilinear')
         y = torch.cat((y, x_big), 1)
         y = self.decode(y)
         return y

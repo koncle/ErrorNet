@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from modules.blocks import StackDecoder, StackEncoder, ConvBnRelu2d
+from modules.blocks import StackDecoder, StackEncoder, ConvBnRelu
 
 
 class UNet(nn.Module):
@@ -14,7 +14,7 @@ class UNet(nn.Module):
         self.down4 = StackEncoder(256, 512, 3, is_bn)   # 16
         self.down5 = StackEncoder(512, 1024, 3, is_bn)  # 8
 
-        self.center = ConvBnRelu2d(1024, 1024, kernel_size=1, padding=1, stride=1, is_bn=is_bn)
+        self.center = ConvBnRelu(1024, 1024, kernel_size=1, padding=1, stride=1, is_bn=is_bn)
 
         # 8
         # x_big_channels, x_channels, y_channels
